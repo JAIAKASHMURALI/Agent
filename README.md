@@ -253,7 +253,7 @@ bash scripts/run_all.sh claude 100000
  export GROQ_API_KEY="gsk_your_key_here"
 bash scripts/run_all.sh groq 100000
 
-This is the mode whose output should actually be trusted for quality claims (Section 9/12). Budget more time — each of the 200 golden examples makes 4 API calls.
+This is the mode whose output should actually be trusted for quality claims (Section 9/12). Budget more time — each of the 200 golden examples makes 4 API calls."
 
 ### 5. Try one message ad-hoc
 ```bash
