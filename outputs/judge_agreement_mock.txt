@@ -1,0 +1,7 @@
+/home/claude/repo/eval/judge_agreement.py:55: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+  rho, p = spearmanr(df["judge_overall_score"], df["human_overall_score"])
+n=30
+Spearman rho: nan (p=nan)
+Exact match rate: 0.000
+Within-1-point rate: 0.133
+Cohen's kappa (good>=4 threshold): 0.000

@@ -1,0 +1,51 @@
+{
+  "n_examples": 200,
+  "llm_mode": "mock",
+  "system": {
+    "intent": {
+      "accuracy": 0.845,
+      "macro_f1": 0.8105
+    },
+    "escalation": {
+      "precision": 0.3333,
+      "recall": 0.1136,
+      "f1": 0.1695,
+      "escalation_rate_pred": 0.075,
+      "escalation_rate_gold": 0.22
+    },
+    "reply_quality": {
+      "mean_overall_score": 5.0,
+      "pct_grounded": 1.0,
+      "pct_correct": 1.0,
+      "pct_polite": 1.0,
+      "pct_actionable": 1.0
+    }
+  },
+  "trivial_baseline": {
+    "intent": {
+      "accuracy": 0.455,
+      "macro_f1": 0.0893
+    },
+    "escalation": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "escalation_rate_pred": 0.0,
+      "escalation_rate_gold": 0.22
+    },
+    "majority_intent_used": "general_or_feedback"
+  },
+  "simple_baseline": {
+    "intent": {
+      "accuracy": 0.845,
+      "macro_f1": 0.8105
+    },
+    "escalation": {
+      "precision": 0.5,
+      "recall": 0.0455,
+      "f1": 0.0833,
+      "escalation_rate_pred": 0.02,
+      "escalation_rate_gold": 0.22
+    }
+  }
+}
