@@ -245,10 +245,14 @@ This subsamples 100,000 raw rows, builds clean pairs, builds the 200-example gol
 ### 4. Run with a real LLM (Claude)
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-#option 2 (gemini model)
- export GEMINI_API_KEY="your api key ...
 bash scripts/run_all.sh claude 100000
-```
+#option 2 (gemini model)
+ export GEMINI_API_KEY="your api key .."
+  bash scripts/run_all.sh gemini 100000
+#option 3 (groq model)
+ export GROQ_API_KEY="gsk_your_key_here"
+bash scripts/run_all.sh groq 100000
+
 This is the mode whose output should actually be trusted for quality claims (Section 9/12). Budget more time — each of the 200 golden examples makes 4 API calls.
 
 ### 5. Try one message ad-hoc
