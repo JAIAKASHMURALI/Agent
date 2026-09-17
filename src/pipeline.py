@@ -38,7 +38,7 @@ def run_one(text: str, index: HistoricalCaseIndex, client, exclude_id=None, k=3)
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", default="data/processed/pairs.csv")
-    ap.add_argument("--llm", choices=["mock", "claude"], default="mock")
+    ap.add_argument("--llm", choices=["mock", "claude","gemini","groq"], default="mock")
     ap.add_argument("--text", default=None, help="Single ad-hoc message to run through the pipeline")
     ap.add_argument("--n_demo", type=int, default=5, help="If --text not given, demo on N random pairs")
     ap.add_argument("--seed", type=int, default=0)

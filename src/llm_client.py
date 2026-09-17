@@ -96,11 +96,77 @@ class MockClient:
         score = max(1, min(5, 2 + overlap // 4))
         good = "true" if score >= 3 else "false"
         return f'{{"grounded": {good}, "correct": {good}, "polite": true, "actionable": {good}, "overall_score": {score}}}'
+class GeminiClient:
+    """Real Google Gemini API client. Requires GEMINI_API_KEY in the environment."""
+    def __init__(self, model_name: str = "gemini-3.6-flash"):
+        self.model_name = model_name
 
+    def complete(self, system: str, user: str) -> str:
+        from google import genai
+        from google.genai import types
+        # Import ServerError alongside ClientError
+        from google.genai.errors import ClientError, ServerError
+        import time
+        
+        client = genai.Client()
+        max_retries = 5
+        
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=user,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                    )
+                )
+                return response.text
+            except (ClientError, ServerError) as e:
+                # Retry on both 429 (Rate Limit) and 503 (Server Overload)
+                if e.code in [429, 503] and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 10
+                    error_type = "Rate Limit (429)" if e.code == 429 else "Server Overloaded (503)"
+                    print(f"[{error_type} Hit] Waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}...")
+                    time.sleep(wait_time)
+                else:
+                    # Throw the error if we run out of retries or it's a different code
+                    raise
+class GroqClient:
+    """Real Groq API client (Free, High Speed, Generous Limits). Requires GROQ_API_KEY in environment."""
+    def __init__(self, model_name: str = "openai/gpt-oss-20b"):
+        self.model_name = model_name
 
+    def complete(self, system: str, user: str) -> str:
+        from groq import Groq
+        import os
+        import time
+
+        client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        max_retries = 5
+
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user}
+                    ],
+                    temperature=0.0
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                if "429" in str(e) and attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    raise                
 def get_client(kind: str = "mock"):
     if kind == "claude":
         return ClaudeClient()
+    if kind == "gemini":
+        return GeminiClient()
+    if kind == "groq":
+        return GroqClient()
     if kind == "mock":
         return MockClient()
     raise ValueError(f"Unknown client kind: {kind}")

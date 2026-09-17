@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-LLM_MODE="${1:-mock}"   # mock | claude
+LLM_MODE="${1:-mock}"   # mock | claude | gemini
 SAMPLE_SIZE="${2:-100000}"  # rows of raw twcs data to subsample before pairing
 
 echo "== 1/4 Data prep (subsampling raw data to ${SAMPLE_SIZE} rows) =="

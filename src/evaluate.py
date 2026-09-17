@@ -80,7 +80,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", default="data/processed/pairs.csv")
     ap.add_argument("--golden", default="eval/golden_set.csv")
-    ap.add_argument("--llm", choices=["mock", "claude"], default="mock")
+    ap.add_argument("--llm", choices=["mock", "claude","gemini","groq"], default="mock")
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--out_results", default="outputs/eval_results.csv")
     ap.add_argument("--out_metrics", default="outputs/metrics.json")
