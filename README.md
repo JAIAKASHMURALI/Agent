@@ -1,198 +1,773 @@
 # AmazonHelp AI Support Agent
 
-An AI-assisted customer support prototype built for the Hiver SDE Intern take-home assignment.
+An AI-assisted customer support prototype built for the **Hiver SDE Intern Take-Home Assignment**.
 
-The system learns from historical AmazonHelp conversations on Twitter/X and performs three tasks:
+The system learns from historical AmazonHelp conversations on Twitter/X and performs three core tasks:
 
-1. Classifies a customer message into an intent.
-2. Retrieves historically similar AmazonHelp conversations.
-3. Drafts a historically grounded response, or escalates the request to a human.
+1. **Intent Classification** — identifies the customer's primary support intent.
+2. **Historical Retrieval** — retrieves historically similar AmazonHelp conversations.
+3. **Response Generation & Escalation** — drafts a historically grounded response or escalates the request to a human when automation should not be trusted.
 
-The goal is not just automation, but demonstrating **when the system should and should not be trusted** — see [`report.md`](report.md) Section 5 ("What is misleading about my headline number") before quoting any metric below out of context.
+> **Important:** This project is designed to demonstrate not only automation, but also **when the system should and should not be trusted**. Before interpreting any metric, read [`report.md`](report.md), especially Section 5, *"What is misleading about my headline number?"*
 
-## 1. Problem
+---
 
-Customer-support conversations on Twitter are noisy, short, multi-turn, and often missing context from earlier in the thread. The system therefore needs to:
+## 1. Problem Statement
 
-- identify the customer's main intent,
-- find relevant historical support examples,
-- produce a reply grounded in those examples rather than a generic one,
-- avoid confidently auto-handling cases where automation is unreliable (money, account access, legal/safety signals, or messages too ambiguous to answer safely).
+Customer-support conversations on Twitter/X are noisy, short, multi-turn, and frequently missing context from earlier messages in the conversation.
+
+The system therefore needs to:
+
+* Identify the customer's main intent.
+* Retrieve relevant historical support examples.
+* Generate a response grounded in those historical examples rather than producing a generic response.
+* Avoid confidently auto-handling cases where automation may be unreliable.
+* Escalate high-risk or ambiguous cases to a human when appropriate.
+* Avoid inventing customer-specific information such as order numbers, refund amounts, dates, or names.
+
+---
 
 ## 2. Dataset
 
-**Dataset:** `thoughtvector/customer-support-on-twitter` (Kaggle), ~3M tweets across many brands.
+### Dataset
 
-**Target brand:** AmazonHelp
+**Source:** `thoughtvector/customer-support-on-twitter` (Kaggle)
 
-**Provided slice:** `data/raw/AmazonHelp_sample.csv`, ~305,000 rows already filtered to AmazonHelp threads.
+The original dataset contains approximately **3 million tweets** across multiple brands.
 
-Customer tweets were paired with the first AmazonHelp reply that directly answered them, using `in_response_to_tweet_id` / `response_tweet_id`, then filtered to English only (`langdetect`) since the taxonomy, judge rubric, and reply drafting are only validated on English. From a 100,000-row subsample, this produced **6,448 clean (customer, agent_reply) pairs**. The full 305k-row file is not fully processed by default, per the assignment's "we will not run your code on the full dataset" rule (`--sample 0` disables subsampling if you want a full run).
+### Target Brand
+
+**AmazonHelp**
+
+### Provided Dataset Slice
+
+```text
+data/raw/AmazonHelp_sample.csv
+```
+
+The provided slice contains approximately **305,000 AmazonHelp-related rows**.
+
+### Data Preparation
+
+Customer tweets were paired with the first AmazonHelp reply that directly answered them using:
+
+* `in_response_to_tweet_id`
+* `response_tweet_id`
+
+The data was then filtered to English-language conversations using `langdetect`.
+
+The taxonomy, evaluation rubric, and response-generation process in this project are validated only for English-language examples.
+
+Using a **100,000-row subsample**, the preprocessing pipeline produced:
+
+**6,448 clean `(customer, agent_reply)` pairs**
+
+The full 305k-row dataset is not processed by default because the assignment explicitly states that the evaluator will not run the code on the full dataset.
+
+To disable subsampling and process the complete dataset:
+
+```bash
+--sample 0
+```
+
+---
 
 ## 3. Intent Taxonomy
 
-Seven intents were defined by reading ~300 sampled AmazonHelp customer tweets by hand before writing any rules:
+Seven coarse-grained intents were defined after manually inspecting approximately 300 sampled AmazonHelp customer tweets.
 
-| Intent | Description |
-|---|---|
-| `delivery_issue` | Late, missing, lost, or mis-tracked shipments |
-| `order_cancel_refund` | Cancellations, refunds, double/incorrect charges |
-| `product_defect` | Item arrived broken, wrong, or faulty |
-| `returns_exchange` | How/where to return or exchange an item already received |
-| `account_payment` | Login, password, billing, membership, payment method issues |
-| `app_tech_issue` | Bugs/errors in the Amazon app, website, Fire TV, Kindle, Alexa/Echo |
-| `general_or_feedback` | Praise, general questions, or anything not clearly one of the above |
+| Intent                | Description                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| `delivery_issue`      | Late, missing, lost, or incorrectly tracked shipments                                       |
+| `order_cancel_refund` | Order cancellation, refunds, duplicate or incorrect charges                                 |
+| `product_defect`      | Item arrived broken, incorrect, damaged, or faulty                                          |
+| `returns_exchange`    | Returning or exchanging an item that was already received                                   |
+| `account_payment`     | Login, password, billing, membership, or payment-method issues                              |
+| `app_tech_issue`      | Problems with Amazon app, website, Fire TV, Kindle, Alexa/Echo, or other technical services |
+| `general_or_feedback` | Praise, general questions, feedback, or anything not clearly covered above                  |
 
-Kept deliberately coarse rather than Banking77-style fine-grained (see `decision_log.md` #2): retail Twitter support is dominated by a handful of high-frequency themes, and a finer taxonomy would mostly split hairs within the catch-all bucket without changing what the agent needs to *do* differently.
+The taxonomy is deliberately coarse rather than highly fine-grained.
 
-## 4. System Architecture
+Retail Twitter support is dominated by a relatively small number of recurring themes. A much finer taxonomy would mostly divide the catch-all category into smaller subcategories without necessarily changing the action the support agent needs to take.
 
-```
-Customer Message
-       |
-       v
-Intent Classifier (rules + LLM)
-       |
-       +--------------------+
-       |                    |
-       v                    v
-Intent Label          Historical Retrieval (TF-IDF)
-                            |
-                            v
-                     Similar AmazonHelp
-                       Resolved Cases
-                            |
-                            v
-                    Escalation Decision
-                    (hard rules -> LLM)
-                       /           \
-                      /             \
-                 Auto-Handle      Escalate
-                   |                 |
-                   v                 v
-          Grounded Draft Reply   Human Review
-           (LLM + retrieved
-              evidence)
+The taxonomy decision is documented in:
+
+```text
+decision_log.md
 ```
 
-## 5. Technical Approach
+See Decision Log **#2** for the rationale.
 
-### Intent Classification
-A keyword/regex rule set (`src/intents.py`) acts as both the "simple baseline" and a fast offline fallback; an LLM classifier (`classify_llm`) is used by the full system and falls back to the rules if its output can't be parsed.
+---
 
-### Historical Reply Retrieval
-`src/retrieval.py` builds a TF-IDF (1-2 gram) index over the 6,448 historical pairs and retrieves the top-k most similar past customer messages by cosine similarity. TF-IDF was chosen over embeddings so the pipeline needs zero model downloads / zero internet, keeping the "reproduce in under 15 minutes" promise honest on a locked-down grading machine — see `decision_log.md` #7 and `report.md` failure mode #2 for where this breaks down (paraphrases with no lexical overlap).
+# 4. System Architecture
 
-### Reply Drafting
-`src/reply_generator.py` passes the retrieved historical cases to the LLM and instructs it to follow the brand's established moves (apologize, ask to DM, point to a help link) **without inventing** order numbers, refund amounts, or dates not given by the customer — this constraint mirrors the judge rubric's `correct` criterion directly.
+```text
+                    Customer Message
+                           |
+                           v
+              +-------------------------+
+              | Intent Classifier       |
+              | Rules + LLM             |
+              +-------------------------+
+                           |
+                           v
+                    Intent Label
+                           |
+                           v
+              +-------------------------+
+              | Historical Retrieval    |
+              | TF-IDF + Cosine         |
+              | Similarity              |
+              +-------------------------+
+                           |
+                           v
+              Similar AmazonHelp Cases
+                           |
+                           v
+              +-------------------------+
+              | Escalation Decision     |
+              | Hard Rules -> LLM       |
+              +-------------------------+
+                       /        \
+                      /          \
+                     v            v
+              Auto-Handle      Escalate
+                  |                |
+                  v                v
+          Grounded Draft       Human Review
+              Reply
+                  |
+                  v
+             Customer
+```
 
-### Escalation Decision
-`src/escalation.py` escalates when:
-- a hard rule fires (legal threat, fraud/safety signal, explicit request for a human) — these are non-overridable and checked *before* any LLM call;
-- the intent is money/account-sensitive (`order_cancel_refund`, `account_payment`) **and** no similar historical case clears a similarity floor;
-- otherwise, an LLM call weighs sentiment/urgency and grounding strength, returning a decision **and a stated reason** (never just a boolean).
+---
 
-If the LLM's escalation output can't be parsed, the system fails safe and escalates rather than guesses.
+# 5. Technical Approach
 
-## 6. Golden Evaluation Set
+## 5.1 Intent Classification
 
-A separate evaluation set of **200 customer-support examples** was built (`eval/build_golden_set.py`), stratified by intent using sqrt(bucket-size) weighting so rare intents aren't drowned out by high-frequency traffic:
+Implementation:
 
-| Intent | Count |
-|---|---:|
-| `general_or_feedback` | 91 |
-| `delivery_issue` | 41 |
-| `order_cancel_refund` | 27 |
-| `account_payment` | 15 |
-| `app_tech_issue` | 12 |
-| `product_defect` | 8 |
-| `returns_exchange` | 6 |
+```text
+src/intents.py
+```
 
-Gold escalation rate: **22%**.
+The project uses two levels of classification:
 
-Each example contains the customer message, the actual historical AmazonHelp reply, a first-pass heuristic intent label, and a first-pass heuristic escalation label — produced by an **independent** labeling routine, not the same code as the system under test, to avoid grading the system against its own rules. `eval/labeling_guidelines.md` is the rubric a human reviewer follows to correct these into verified ground truth (`gold_intent_reviewed` / `gold_escalate_reviewed`, with a `reviewed_by_human` flag). **These columns should be manually audited before being trusted as ground truth** — see `report.md` Section 5.
+### Rule-Based Classifier
 
-## 7. Evaluation Results
+A keyword/regex rule set provides:
 
-All results below are from `outputs/metrics.json`, produced with `--llm mock` (see Section 9 for why this matters).
+* A simple baseline.
+* A fast offline fallback.
+* Deterministic behavior when the LLM is unavailable.
 
-### Intent Classification
+### LLM Classifier
 
-| Metric | System | Simple baseline | Trivial baseline |
-|---|---:|---:|---:|
-| Accuracy | 84.5% | 84.5% | 45.5% |
-| Macro F1 | 81.1% | 81.1% | 8.9% |
+The full system can use an LLM classifier through:
 
-System and simple-baseline accuracy are identical in mock mode because the mock LLM's intent call *is* the rule-based classifier under the hood — this comparison only becomes meaningful once run with `--llm claude` (see Section 12).
+```text
+classify_llm
+```
 
-### Escalation Decision
+If the LLM output cannot be parsed into a valid intent, the system falls back to the rule-based classifier.
 
-| Metric | System | Simple baseline | Trivial baseline |
-|---|---:|---:|---:|
-| Precision | 33.3% | 50.0% | 0.0% |
-| Recall | 11.4% | 4.6% | 0.0% |
-| F1 | 17.0% | 8.3% | 0.0% |
-| Predicted escalation rate | 7.5% | 2.0% | 0.0% |
-| Gold escalation rate | 22.0% | 22.0% | 22.0% |
+---
 
-Recall is the headline weakness here for every system: none catch anywhere near the true 22% escalation rate. The hybrid system beats the keyword-only baseline on recall (hard rules + money-intent-without-grounding rules) but is still far too conservative — see `report.md` failure mode #1.
+## 5.2 Historical Reply Retrieval
 
-## 8. Baselines
+Implementation:
 
-**Trivial baseline** (`baselines/trivial_baseline.py`): always predicts the majority intent (`general_or_feedback`), always returns the same canned reply, never escalates. Exists purely to give the real system a floor to beat.
+```text
+src/retrieval.py
+```
 
-**Simple baseline** (`baselines/simple_baseline.py`): keyword-rule intent, 1-nearest-neighbor reply copy (no generation/adaptation), keyword-only escalation. No LLM calls at all — isolates how much value the LLM generation/judgment step adds over pure retrieval + rules.
+The retrieval system:
 
-## 9. Reply Quality Evaluation
+1. Builds a TF-IDF index over the **6,448 cleaned historical pairs**.
+2. Uses word n-grams from 1-2.
+3. Represents customer messages as TF-IDF vectors.
+4. Calculates cosine similarity.
+5. Retrieves the top-k historically similar customer conversations.
 
-An LLM-as-judge rubric (`eval/judge.py`) scores drafted replies on **grounded / correct / polite / actionable** plus a 1-5 overall score. To check whether this judge can be trusted, 30 examples were **hand-rated by a human independently** and compared against the judge's score (`eval/judge_agreement.py`, results in `outputs/judge_agreement_mock.txt`):
+### Why TF-IDF?
 
-| | Result |
-|---|---:|
-| Mean human score (1-5) | 2.47 |
-| Mean mock-judge score | 5.00 (constant) |
-| Spearman correlation | undefined (zero judge variance) |
-| Exact match rate | 0.0% |
-| Cohen's kappa (good ≥4 threshold) | 0.0 |
+TF-IDF was selected instead of embedding-based retrieval because it:
 
-**The mock judge has zero measured agreement with a human and must not be used to make any reply-quality claim.** It exists only so the pipeline is runnable end-to-end without an API key. This is reported as a real finding, not hidden — running `--llm claude` and redoing this check is priority #1 in Section 12.
+* Requires no model downloads.
+* Requires no external embedding service.
+* Works completely offline.
+* Is lightweight.
+* Makes the project easier to reproduce on a locked-down grading machine.
 
-## 10. Top Failure Modes
+However, this creates an important limitation:
 
-**1. Escalation recall is far too low (11% vs. a 22% gold rate).**
-Example: *"...my issue is still not resolved nor I have received the product... shared the details in links for 10 times"* — a textbook repeat-contact escalation that hits no hard-rule keyword and falls through to LLM judgment. The hard-rule list is likely too narrow.
+> TF-IDF performs poorly when two messages express the same problem using very different wording.
 
-**2. TF-IDF retrieval fails on paraphrases with no lexical overlap.**
-Example: *"I've just had an alleged failed delivery attempt even though I've been at home all day"* — no historical case shares this phrasing, so the nearest neighbor pulled an unrelated case and the draft reply hallucinated an irrelevant detail.
+This failure mode is discussed in [`report.md`](report.md).
 
-**3. Context-free, ambiguous tweets are confidently mis-handled.**
-Messages like *"So that's it!!"* or *"I've just had this"* are almost certainly thread replies where the real complaint is in an earlier tweet the single-message pipeline never sees.
+---
 
-**4. Occasional hallucinated personalization.**
-A few drafted replies invented a customer name never given in the message or the retrieved case — exactly what the judge's `correct` criterion exists to catch.
+## 5.3 Reply Generation
 
-**5. Non-English traffic is silently dropped, not handled.**
-~85-90% of raw rows are excluded by the language filter; every number in this README applies only to the English subset.
+Implementation:
 
-## 11. What Is Misleading About My Headline Number?
+```text
+src/reply_generator.py
+```
 
-The headline "84.5% intent accuracy" should not be read as "the agent is 84.5% good." It's identical to the rule-only simple baseline in this mock-mode run (Section 7), it's measured against a skewed label distribution where the majority class alone gets 45.5% for free, and it says nothing about reply quality or escalation judgment. The reply-quality numbers from the mock run are likewise omitted from the results table on purpose, because a judge with zero measured human agreement (Section 9) produces numbers that look quantitative but aren't evidence. See `report.md` Section 5 for the full discussion, including the golden set's label-review status and the dataset's language coverage gap.
+The retrieved historical conversations are provided to the LLM as supporting evidence.
 
-## 12. What I Would Do With One More Week
+The model is instructed to:
 
-1. Run the real judge — redo Sections 7-9 with `--llm claude` and real API calls; nothing above should be treated as a quality claim until this is done.
-2. Fix escalation recall — widen the hard-rule set and add an explicit sentiment/repetition signal rather than relying on the LLM to infer urgency unaided.
-3. Swap TF-IDF for embedding-based retrieval to fix paraphrase failures, with an ablation on the same golden set.
-4. Add thread context (the 1-2 preceding tweets) so context-free leaf messages can be classified/answered correctly.
-5. Full-dataset pairing plus a fully human-reviewed golden set, with a second rater for inter-rater reliability on the judge-agreement check itself.
+* Follow the support patterns seen in historical AmazonHelp conversations.
+* Produce a useful and actionable response.
+* Remain polite.
+* Ground the answer in the retrieved evidence.
+* Avoid inventing information.
 
-## 13. Repository Structure
+The system specifically avoids fabricating:
+
+* Order numbers.
+* Refund amounts.
+* Delivery dates.
+* Customer names.
+* Other customer-specific information that was not provided.
+
+This constraint directly reflects the evaluation rubric's `correct` criterion.
+
+---
+
+## 5.4 Escalation Decision
+
+Implementation:
+
+```text
+src/escalation.py
+```
+
+The escalation system uses a hybrid strategy.
+
+### Hard Escalation Rules
+
+Certain signals trigger escalation before an LLM decision is made.
+
+Examples include:
+
+* Legal threats.
+* Fraud or safety signals.
+* Explicit requests for a human agent.
+
+These rules are **non-overridable**.
+
+### Money / Account Sensitive Cases
+
+Cases involving:
+
+```text
+order_cancel_refund
+account_payment
+```
+
+can be escalated when no sufficiently similar historical case passes the configured similarity threshold.
+
+### LLM-Based Decision
+
+For other cases, the LLM considers:
+
+* Sentiment.
+* Urgency.
+* Repeated contact.
+* Grounding strength.
+* Available historical evidence.
+
+The output contains both:
+
+```text
+decision
+reason
+```
+
+rather than returning only a boolean.
+
+If the LLM escalation response cannot be parsed, the system **fails safe and escalates** instead of guessing.
+
+---
+
+# 6. Golden Evaluation Set
+
+A separate evaluation set of **200 customer-support examples** was created using:
+
+```text
+eval/build_golden_set.py
+```
+
+The examples were stratified by intent using sqrt(bucket-size) weighting so that rare intents were not completely dominated by high-frequency traffic.
+
+## Intent Distribution
+
+| Intent                |   Count |
+| --------------------- | ------: |
+| `general_or_feedback` |      91 |
+| `delivery_issue`      |      41 |
+| `order_cancel_refund` |      27 |
+| `account_payment`     |      15 |
+| `app_tech_issue`      |      12 |
+| `product_defect`      |       8 |
+| `returns_exchange`    |       6 |
+| **Total**             | **200** |
+
+### Gold Escalation Rate
+
+```text
+22.0%
+```
+
+Each evaluation example contains:
+
+* Customer message.
+* Actual historical AmazonHelp reply.
+* First-pass heuristic intent label.
+* First-pass heuristic escalation label.
+
+The first-pass labels are generated by an **independent labeling routine**, rather than directly copying the system-under-test's output.
+
+This reduces the risk of evaluating the system against its own rules.
+
+Human reviewers can correct these labels using:
+
+```text
+eval/labeling_guidelines.md
+```
+
+The reviewed fields are:
+
+```text
+gold_intent_reviewed
+gold_escalate_reviewed
+reviewed_by_human
+```
+
+> **Important:** The first-pass labels should be manually audited before being treated as verified ground truth.
+
+See [`report.md`](report.md) for the detailed discussion.
+
+---
+
+# 7. Evaluation Results
+
+The following results were generated from:
+
+```text
+outputs/metrics.json
+```
+
+using:
+
+```bash
+--llm mock
+```
+
+Therefore, these numbers should be interpreted as **pipeline/reproducibility results**, not evidence of real LLM quality.
+
+---
+
+## 7.1 Intent Classification
+
+| Metric   | System | Simple Baseline | Trivial Baseline |
+| -------- | -----: | --------------: | ---------------: |
+| Accuracy |  84.5% |           84.5% |            45.5% |
+| Macro F1 |  81.1% |           81.1% |             8.9% |
+
+In mock mode, the system and simple baseline have identical intent performance because the mock LLM's intent implementation uses the same rule-based classifier underneath.
+
+Therefore, this comparison does **not** demonstrate an advantage from LLM-based classification.
+
+A meaningful LLM comparison requires running with a real LLM configuration.
+
+---
+
+## 7.2 Escalation Decision
+
+| Metric                    | System | Simple Baseline | Trivial Baseline |
+| ------------------------- | -----: | --------------: | ---------------: |
+| Precision                 |  33.3% |           50.0% |             0.0% |
+| Recall                    |  11.4% |            4.6% |             0.0% |
+| F1                        |  17.0% |            8.3% |             0.0% |
+| Predicted Escalation Rate |   7.5% |            2.0% |             0.0% |
+| Gold Escalation Rate      |  22.0% |           22.0% |            22.0% |
+
+The major weakness is **escalation recall**.
+
+The system identifies substantially fewer escalation cases than the gold evaluation set contains.
+
+This is a key limitation rather than a result to hide.
+
+See [`report.md`](report.md) Failure Mode #1.
+
+---
+
+# 8. Baselines
+
+## 8.1 Trivial Baseline
+
+Implementation:
+
+```text
+baselines/trivial_baseline.py
+```
+
+Behavior:
+
+* Always predicts the majority intent.
+* Always returns the same canned response.
+* Never escalates.
+
+Purpose:
+
+> Establish a minimum performance floor.
+
+---
+
+## 8.2 Simple Baseline
+
+Implementation:
+
+```text
+baselines/simple_baseline.py
+```
+
+Behavior:
+
+* Keyword-rule intent classification.
+* 1-nearest-neighbor historical reply.
+* No response generation.
+* Keyword-only escalation.
+* No LLM calls.
+
+Purpose:
+
+> Isolate the value added by the LLM generation and judgment stages.
+
+---
+
+# 9. Reply Quality Evaluation
+
+Implementation:
+
+```text
+eval/judge.py
+```
+
+The project contains an LLM-as-judge evaluation rubric covering:
+
+* Groundedness.
+* Correctness.
+* Politeness.
+* Actionability.
+* Overall score from 1-5.
+
+To determine whether the judge itself is trustworthy, **30 examples were independently rated by a human**.
+
+The results are stored in:
+
+```text
+outputs/judge_agreement_mock.txt
+```
+
+## Mock Judge Agreement
+
+| Metric                 |                               Result |
+| ---------------------- | -----------------------------------: |
+| Mean Human Score (1-5) |                                 2.47 |
+| Mean Mock-Judge Score  |                                 5.00 |
+| Spearman Correlation   | Undefined due to zero judge variance |
+| Exact Match Rate       |                                 0.0% |
+| Cohen's Kappa          |                                  0.0 |
+
+### Important Finding
+
+The mock judge has **zero measured agreement with the human ratings**.
+
+Therefore:
+
+> **The mock judge must not be used to make reply-quality claims.**
+
+The mock judge exists only to allow the pipeline to execute end-to-end without requiring an API key.
+
+This limitation is intentionally reported rather than hidden.
+
+---
+
+# 10. Top Failure Modes
+
+## Failure Mode 1 — Escalation Recall Is Too Low
+
+Current escalation recall:
+
+```text
+11.4%
+```
+
+Compared with the gold escalation rate:
+
+```text
+22.0%
+```
+
+Example pattern:
+
+> A customer reports that their issue remains unresolved after repeatedly providing details.
+
+This type of repeat-contact escalation may not contain obvious hard-rule keywords and can therefore reach the LLM judgment stage.
+
+### Possible Improvement
+
+Add stronger signals for:
+
+* Repeated contact.
+* Long unresolved cases.
+* Increasing frustration.
+* Multiple previous support attempts.
+* Strong urgency language.
+
+---
+
+## Failure Mode 2 — TF-IDF Retrieval Misses Paraphrases
+
+Example:
+
+> "I've just had an alleged failed delivery attempt even though I've been at home all day."
+
+A historically similar case may exist but use completely different vocabulary.
+
+Because TF-IDF depends on lexical overlap, the retriever may select an unrelated conversation.
+
+### Possible Improvement
+
+Replace or augment TF-IDF with embedding-based retrieval.
+
+---
+
+## Failure Mode 3 — Missing Thread Context
+
+Short messages such as:
+
+```text
+"So that's it!!"
+```
+
+or:
+
+```text
+"I've just had this"
+```
+
+may be replies to an earlier tweet.
+
+The current pipeline sees only the individual message.
+
+Consequently, it may not have enough information to determine:
+
+* The customer's actual problem.
+* The correct intent.
+* Whether escalation is required.
+* What response should be generated.
+
+### Possible Improvement
+
+Include the previous 1-2 tweets from the conversation thread.
+
+---
+
+## Failure Mode 4 — Occasional Hallucinated Personalization
+
+Some generated replies may introduce information that was never provided.
+
+Examples include:
+
+* Customer names.
+* Specific order information.
+* Dates.
+* Other unsupported details.
+
+This violates the grounding requirement.
+
+The response-generation prompt therefore explicitly prohibits invented customer-specific information.
+
+---
+
+## Failure Mode 5 — Non-English Traffic Is Dropped
+
+Approximately **85-90% of raw rows are excluded by the English-language filter**.
+
+Therefore:
+
+> All evaluation numbers in this README apply only to the English-language subset.
+
+The current system does not attempt multilingual support.
+
+---
+
+# 11. What Is Misleading About the Headline Number?
+
+The headline:
+
+```text
+84.5% intent accuracy
+```
+
+should **not** be interpreted as:
+
+> "The AI support agent is 84.5% good."
+
+There are several reasons.
+
+### 1. Mock Mode
+
+The evaluation was performed using:
+
+```text
+--llm mock
+```
+
+The mock intent implementation uses the same rule-based classifier as the simple baseline.
+
+Therefore, the system's:
+
+```text
+84.5% accuracy
+```
+
+is identical to the simple baseline.
+
+---
+
+### 2. Class Distribution
+
+The majority intent alone achieves:
+
+```text
+45.5%
+```
+
+accuracy.
+
+Therefore, accuracy alone does not adequately describe performance across all intents.
+
+Macro F1 is also reported to account for class-level performance.
+
+---
+
+### 3. Intent Accuracy Does Not Measure Reply Quality
+
+A system can correctly identify an intent and still generate a poor response.
+
+Intent classification therefore measures only one component of the complete support workflow.
+
+---
+
+### 4. Escalation Performance Is Weak
+
+The system's escalation recall is only:
+
+```text
+11.4%
+```
+
+against a:
+
+```text
+22.0%
+```
+
+gold escalation rate.
+
+This is important because a support agent must know when **not** to automate.
+
+---
+
+### 5. Mock Judge Cannot Validate Reply Quality
+
+The mock judge showed:
+
+```text
+0.0 Cohen's kappa
+0.0% exact agreement
+```
+
+with the human ratings.
+
+Therefore, mock-mode reply-quality scores are not evidence of real response quality.
+
+---
+
+# 12. What I Would Do With One More Week
+
+## Priority 1 — Run the Real Judge
+
+Run the complete evaluation using a real LLM and repeat the judge-agreement experiment.
+
+This would provide evidence about whether the response-quality evaluation is meaningful.
+
+---
+
+## Priority 2 — Improve Escalation Recall
+
+Expand the hard-rule set and introduce explicit signals for:
+
+* Repeat contact.
+* Unresolved issues.
+* Strong frustration.
+* Urgency.
+* Safety/fraud/legal language.
+
+---
+
+## Priority 3 — Improve Retrieval
+
+Experiment with embedding-based retrieval.
+
+Run an ablation comparing:
+
+```text
+TF-IDF
+vs.
+Embedding Retrieval
+```
+
+on the same evaluation set.
+
+---
+
+## Priority 4 — Add Thread Context
+
+Include the preceding 1-2 tweets where available.
+
+This should help with context-free messages.
+
+---
+
+## Priority 5 — Improve Evaluation Quality
+
+Create a fully human-reviewed golden set and use a second independent reviewer to measure inter-rater reliability.
+
+---
+
+# 13. Repository Structure
 
 ```text
 repo/
+│
 ├── data/
-│   ├── raw/AmazonHelp_sample.csv       # provided AmazonHelp-filtered slice
-│   └── processed/pairs.csv              # generated: cleaned (customer, reply) pairs
+│   ├── raw/
+│   │   └── AmazonHelp_sample.csv
+│   │
+│   └── processed/
+│       └── pairs.csv
+│
 ├── src/
 │   ├── data_prep.py
 │   ├── intents.py
@@ -202,85 +777,560 @@ repo/
 │   ├── llm_client.py
 │   ├── pipeline.py
 │   └── evaluate.py
+│
 ├── baselines/
 │   ├── trivial_baseline.py
 │   └── simple_baseline.py
+│
 ├── eval/
 │   ├── build_golden_set.py
 │   ├── labeling_guidelines.md
 │   ├── golden_set.csv
 │   ├── judge.py
 │   └── judge_agreement.py
+│
 ├── outputs/
 │   ├── eval_results.csv
 │   ├── metrics.json
 │   ├── human_ratings_template.csv
 │   └── judge_agreement_mock.txt
-├── scripts/run_all.sh
+│
+├── scripts/
+│   └── run_all.sh
+│
 ├── requirements.txt
 ├── report.md
 ├── decision_log.md
-└── README.md
+├── README.md
+└── .gitignore
 ```
 
-## 14. How to Run
+> Generated files such as processed datasets and evaluation outputs may be regenerated by the pipeline depending on the repository version.
 
-### 1. Create and activate a virtual environment
+---
+
+# 14. Installation & Setup
+
+## Requirements
+
+Recommended environment:
+
+* Python 3.10+
+* Git
+* Bash shell
+* Internet connection for real LLM API calls
+* A Groq, Claude, or Gemini API key for real LLM evaluation
+
+The mock mode does **not** require an API key.
+
+---
+
+## 14.1 Clone the Repository
+
+```bash
+git clone <YOUR_GITHUB_REPOSITORY_URL>
+cd Agent
+```
+
+---
+
+## 14.2 Create a Virtual Environment
+
+### Linux / macOS / Git Bash
+
 ```bash
 python3 -m venv venv
-source venv/bin/activate   # Windows: .\venv\Scripts\Activate.ps1
+source venv/bin/activate
 ```
 
-### 2. Install dependencies
+### Windows PowerShell
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+### Windows Command Prompt
+
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+---
+
+## 14.3 Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Reproduce the headline results (< 15 minutes, no API key needed)
+---
+
+# 15. Running the Project
+
+## 15.1 Recommended First Run — Mock Mode
+
+The easiest way to verify that the repository works is:
+
 ```bash
 bash scripts/run_all.sh mock 100000
 ```
-This subsamples 100,000 raw rows, builds clean pairs, builds the 200-example golden set, runs a 5-example live pipeline demo, then runs the full evaluation harness (system + both baselines), writing `outputs/metrics.json` and `outputs/eval_results.csv`.
 
-### 4. Run with a real LLM (Claude)
+This mode requires **no API key**.
+
+The pipeline performs:
+
+```text
+100,000 raw rows
+        ↓
+Data preprocessing
+        ↓
+Clean customer/reply pairs
+        ↓
+Golden evaluation set
+        ↓
+5-example pipeline demonstration
+        ↓
+200-example evaluation
+        ↓
+Baseline evaluation
+        ↓
+Metrics generation
+```
+
+Expected output files include:
+
+```text
+outputs/metrics.json
+outputs/eval_results.csv
+```
+
+This is the recommended first command for an evaluator.
+
+---
+
+# 16. Running With a Real LLM
+
+Real LLM execution requires an API key.
+
+> **Never commit an API key to GitHub.**
+
+The repository should contain only a template such as:
+
+```text
+.env.example
+```
+
+Example:
+
+```env
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+The real key should remain local or be supplied through an environment variable.
+
+---
+
+## 16.1 Groq
+
+Set the environment variable.
+
+### Git Bash
+
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-bash scripts/run_all.sh claude 100000
-#option 2 (gemini model)
- export GEMINI_API_KEY="your api key .."
-  bash scripts/run_all.sh gemini 100000
-#option 3 (groq model)
- export GROQ_API_KEY="gsk_your_key_here"
+export GROQ_API_KEY="gsk_your_key_here"
+```
+
+Then run:
+
+```bash
 bash scripts/run_all.sh groq 100000
-
-This is the mode whose output should actually be trusted for quality claims (Section 9/12). Budget more time — each of the 200 golden examples makes 4 API calls."
-
-### 5. Try one message ad-hoc
-```bash
-python3 src/pipeline.py --llm mock --text "My package says delivered but I never got it, this is the second time this month"
 ```
 
-### 6. Check judge-vs-human agreement
-```bash
-python3 eval/judge_agreement.py --results outputs/eval_results.csv --n 30   # writes a template to fill in by hand
-python3 eval/judge_agreement.py --template outputs/human_ratings_template.csv --score
+### Windows PowerShell
+
+```powershell
+$env:GROQ_API_KEY="gsk_your_key_here"
 ```
 
-## 15. Decision Log
+Then:
 
-Non-obvious design decisions are documented in [`decision_log.md`](decision_log.md), including: reading raw data by hand before writing intent rules, choosing a coarse 7-intent taxonomy, keeping baselines LLM-free, switching from an ASCII-ratio to `langdetect` for language filtering, pairing customer tweets with only the *first* brand reply, using non-overridable hard rules for high-stakes escalation, choosing TF-IDF over embeddings for offline reproducibility, building a deterministic mock LLM fallback, using an independent labeling function for golden-set first-pass labels, sqrt-weighted stratified sampling, and defaulting escalation gold labels to "escalate when unsure."
+```powershell
+bash scripts/run_all.sh groq 100000
+```
 
-## 16. Limitations and Trustworthiness
+For a permanent Windows user environment variable:
 
-This is a prototype, not a production customer-support system.
+```powershell
+[Environment]::SetEnvironmentVariable(
+    "GROQ_API_KEY",
+    "gsk_your_key_here",
+    "User"
+)
+```
 
-- The provided dataset slice is noisy and multi-turn; the pipeline only looks at single messages, not full thread context.
-- Golden-set labels are first-pass heuristic labels and need human review before being trusted as ground truth (Section 6).
-- Retrieval is TF-IDF, which fails on paraphrases with no lexical overlap (Section 10).
-- Every number in this README was produced in `--llm mock` mode; the real, evaluated numbers require `--llm claude` with an API key and have not yet been produced (Section 12, #1).
-- The LLM-judge's agreement with a human was measured and found to be essentially zero in mock mode (Section 9) — this must be re-measured in `claude` mode before the judge is trusted.
-- The system covers English-language traffic only (~10-15% of the raw AmazonHelp data).
+After setting a permanent environment variable, restart Git Bash / VS Code before running the project.
 
-## 17. Conclusion
+---
 
-This project demonstrates an end-to-end approach for turning noisy AmazonHelp Twitter conversations into an AI-assisted support workflow: classifying incoming messages, retrieving historically similar resolved cases, drafting a grounded reply, and deciding whether to auto-handle or escalate — with a stated reason either way. The evaluation is built to expose weaknesses rather than hide them: escalation recall is currently too low, the offline mock judge has no measured agreement with a human, and the intent classifier's advantage over a keyword-only baseline has not yet been demonstrated with a real LLM. Those three gaps, not the headline accuracy number, are the honest summary of where this system stands.
+## 16.2 Claude
+
+Set:
+
+```bash
+export ANTHROPIC_API_KEY="your_api_key_here"
+```
+
+Then:
+
+```bash
+bash scripts/run_all.sh claude 100000
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:ANTHROPIC_API_KEY="your_api_key_here"
+```
+
+---
+
+## 16.3 Gemini
+
+Set:
+
+```bash
+export GEMINI_API_KEY="your_api_key_here"
+```
+
+Then:
+
+```bash
+bash scripts/run_all.sh gemini 100000
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:GEMINI_API_KEY="your_api_key_here"
+```
+
+---
+
+# 17. Run a Single Message
+
+The pipeline can also process an individual message.
+
+Example:
+
+```bash
+python src/pipeline.py \
+  --llm mock \
+  --text "My package says delivered but I never got it, this is the second time this month"
+```
+
+The pipeline returns the predicted:
+
+* Intent.
+* Retrieved historical examples.
+* Escalation decision.
+* Escalation reason.
+* Draft response.
+
+---
+
+# 18. Judge vs Human Agreement
+
+To generate the human-rating template:
+
+```bash
+python eval/judge_agreement.py \
+  --results outputs/eval_results.csv \
+  --n 30
+```
+
+This creates:
+
+```text
+outputs/human_ratings_template.csv
+```
+
+After manually entering the human ratings:
+
+```bash
+python eval/judge_agreement.py \
+  --template outputs/human_ratings_template.csv \
+  --score
+```
+
+This calculates agreement statistics between the judge and human ratings.
+
+---
+
+# 19. Reproducibility
+
+The project is designed so that an evaluator can first run the entire pipeline without an API key.
+
+### Fast reproducibility check
+
+```bash
+bash scripts/run_all.sh mock 100000
+```
+
+### Real LLM evaluation
+
+```bash
+bash scripts/run_all.sh groq 100000
+```
+
+or:
+
+```bash
+bash scripts/run_all.sh claude 100000
+```
+
+or:
+
+```bash
+bash scripts/run_all.sh gemini 100000
+```
+
+The exact runtime depends on:
+
+* Hardware.
+* Python environment.
+* Dataset size.
+* API latency.
+* API rate limits.
+* LLM provider.
+
+---
+
+# 20. Security & API Keys
+
+API keys are intentionally **not included in this repository**.
+
+Before pushing to GitHub, verify that no secret is present:
+
+```bash
+git status
+```
+
+Check tracked files:
+
+```bash
+git ls-files
+```
+
+The `.gitignore` should contain:
+
+```gitignore
+.env
+*.pyc
+__pycache__/
+```
+
+If using environment variables, the source code should access them through:
+
+```python
+os.environ.get("GROQ_API_KEY")
+```
+
+rather than hard-coding credentials.
+
+> **Never commit real API keys, passwords, tokens, or private credentials to the repository.**
+
+---
+
+# 21. Decision Log
+
+Non-obvious engineering decisions are documented in:
+
+```text
+decision_log.md
+```
+
+Important decisions include:
+
+1. Reading raw data manually before writing intent rules.
+2. Using a coarse seven-intent taxonomy.
+3. Keeping baselines LLM-free.
+4. Using `langdetect` for language filtering.
+5. Pairing customer tweets with the first directly answering brand reply.
+6. Using non-overridable hard rules for high-risk escalation.
+7. Choosing TF-IDF instead of embeddings for offline reproducibility.
+8. Creating a deterministic mock LLM fallback.
+9. Using an independent labeling function for golden-set first-pass labels.
+10. Using sqrt-weighted stratified sampling.
+11. Defaulting escalation labels to "escalate when unsure."
+
+---
+
+# 22. Limitations & Trustworthiness
+
+This project is a **prototype**, not a production customer-support system.
+
+Important limitations include:
+
+### Dataset
+
+The provided dataset is noisy and multi-turn.
+
+The current pipeline processes individual messages rather than complete conversation threads.
+
+### Golden Labels
+
+The evaluation set initially contains first-pass heuristic labels.
+
+These require human review before being treated as verified ground truth.
+
+### Retrieval
+
+TF-IDF retrieval can fail when semantically similar messages use different vocabulary.
+
+### Language Coverage
+
+Only English-language traffic is currently processed.
+
+Approximately 85-90% of raw rows are removed by the language filter.
+
+### Mock LLM
+
+The current reported metrics were generated using:
+
+```text
+--llm mock
+```
+
+Therefore, they should not be interpreted as evidence of real LLM performance.
+
+### Judge Reliability
+
+The mock judge demonstrated essentially zero agreement with the independent human ratings.
+
+Therefore, mock judge results should not be used to claim strong response quality.
+
+### Escalation
+
+Escalation recall is currently too low and requires further improvement.
+
+---
+
+# 23. Key Findings
+
+The most important findings from the current evaluation are:
+
+```text
+Intent accuracy:
+84.5%
+
+Intent macro F1:
+81.1%
+
+Gold escalation rate:
+22.0%
+
+System escalation recall:
+11.4%
+
+Mock judge / human Cohen's kappa:
+0.0
+```
+
+The results demonstrate that the pipeline is executable and that the intent classifier performs substantially above the trivial majority-class baseline.
+
+However, the results also expose important weaknesses:
+
+* The intent classifier does not yet demonstrate an advantage over the simple rule-based baseline in mock mode.
+* Escalation recall is too low.
+* TF-IDF retrieval struggles with paraphrases.
+* Thread context is missing.
+* The mock judge cannot currently validate response quality.
+* English-only filtering excludes most of the raw dataset.
+
+These limitations are intentionally documented as part of the evaluation.
+
+---
+
+# 24. Conclusion
+
+This project demonstrates an end-to-end AI-assisted customer-support workflow built around historical AmazonHelp Twitter/X conversations.
+
+The system:
+
+```text
+Customer Message
+       ↓
+Intent Classification
+       ↓
+Historical Retrieval
+       ↓
+Escalation Decision
+       ↓
+ ┌───────────────┐
+ │               │
+Auto-Handle   Human Review
+ │
+ ↓
+Grounded Reply
+```
+
+The primary objective is not simply to maximize a single metric.
+
+Instead, the project demonstrates:
+
+* How to classify customer-support requests.
+* How to retrieve historically similar conversations.
+* How to generate grounded responses.
+* How to identify cases requiring human review.
+* How to evaluate against simple baselines.
+* How to identify weaknesses in the evaluation itself.
+* How to distinguish reproducibility from genuine model quality.
+
+The current results show a functioning end-to-end prototype, while also making clear that **escalation recall, retrieval robustness, thread context, human-reviewed labels, and real-LLM judge validation remain the main areas for improvement**.
+
+For the detailed analysis, failure cases, and interpretation of the evaluation results, see:
+
+* [`report.md`](report.md)
+* [`decision_log.md`](decision_log.md)
+* [`eval/labeling_guidelines.md`](eval/labeling_guidelines.md)
+
+---
+
+## Quick Start
+
+For an evaluator who wants to verify the project quickly:
+
+```bash
+git clone <YOUR_GITHUB_REPOSITORY_URL>
+cd Agent
+
+python -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+bash scripts/run_all.sh mock 100000
+```
+
+No API key is required for the mock run.
+
+For real LLM evaluation, configure the appropriate API key and run:
+
+```bash
+bash scripts/run_all.sh groq 100000
+```
+
+or:
+
+```bash
+bash scripts/run_all.sh claude 100000
+```
+
+or:
+
+```bash
+bash scripts/run_all.sh gemini 100000
+```
+
