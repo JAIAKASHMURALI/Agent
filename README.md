@@ -1,4 +1,4 @@
-# AmazonHelp AI Support Agent — Hiver SDE Intern Take-Home
+# AmazonHelp AI Support Agent 
 
 An AI support agent for **@AmazonHelp** (Twitter), built from the Kaggle
 "Customer Support on Twitter" dataset. Given an incoming customer message,
